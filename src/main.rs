@@ -1,39 +1,52 @@
-//! Blinks the LED on a Pico board
-//!
-//! This will blink an LED attached to GP25, which is the pin the Pico uses for the on-board LED.
 #![no_std]
 #![no_main]
 
-use bsp::entry;
+use cortex_m_rt::entry;
+use defmt::debug_assert_ne;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::spi::MODE_0;
+use embedded_time::duration::Milliseconds;
+use embedded_time::fixed_point::FixedPoint;
+// use embedded_time::rate::Extensions;
+// use embedded_time::rate::Megahertz;
 use panic_probe as _;
+use rp_pico::hal;
 
-// Provide an alias for our BSP so we can switch targets quickly.
-// Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
-use rp_pico as bsp;
-// use sparkfun_pro_micro_rp2040 as bsp;
+use rp_pico::hal::fugit::RateExtU32;
+use rp_pico::hal::pac;
+use rp_pico::hal::prelude::*;
+use rp_pico::hal::{gpio::FunctionSpi, sio::Sio, spi::Spi};
+use smart_leds::{SmartLedsWrite, White, RGBW};
+use ws2812_spi::Ws2812;
 
-use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
-};
+/// The linker will place this boot block at the start of our program image. We
+/// need this to help the ROM bootloader get our code up and running.
+#[link_section = ".boot_loader"]
+#[used]
+pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+
+// const SYS_HZ: u32 = 125_000_000_u32;
 
 #[entry]
 fn main() -> ! {
     info!("Program start");
+
+    const DELAY: Milliseconds<u32> = Milliseconds::<u32>(1_000);
+    const NUM_LEDS: usize = 8;
+    debug_assert_ne!(NUM_LEDS, 0);
+
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
 
-    // External high-speed crystal on the pico board is 12Mhz
-    let external_xtal_freq_hz = 12_000_000u32;
-    let clocks = init_clocks_and_plls(
-        external_xtal_freq_hz,
+    // Set up the watchdog driver - needed by the clock setup code
+    let mut watchdog = hal::watchdog::Watchdog::new(pac.WATCHDOG);
+
+    // Configure the clocks
+    //
+    // Our default is 12 MHz crystal input, 125 MHz system clock
+    let clocks = hal::clocks::init_clocks_and_plls(
+        rp_pico::XOSC_CRYSTAL_FREQ,
         pac.XOSC,
         pac.CLOCKS,
         pac.PLL_SYS,
@@ -44,30 +57,62 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
+    // let frequency = Rate::MHz(3u32);
+
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    let pins = bsp::Pins::new(
+    let sio = Sio::new(pac.SIO);
+
+    let pins = rp_pico::Pins::new(
         pac.IO_BANK0,
         pac.PADS_BANK0,
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
 
-    // This is the correct pin on the Raspberry Pico board. On other boards, even if they have an
-    // on-board LED, it might need to be changed.
-    // Notably, on the Pico W, the LED is not connected to any of the RP2040 GPIOs but to the cyw43 module instead. If you have
-    // a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
-    // LED to one of the GPIO pins, and reference that pin here.
-    let mut led_pin = pins.led.into_push_pull_output();
+    // These are implicitly used by the spi driver if they are in the correct mode
+    let _spi_sclk = pins.gpio6.into_function::<FunctionSpi>();
+    let _spi_mosi = pins.gpio7.into_function::<FunctionSpi>();
+    let _spi_miso = pins.gpio4.into_function::<FunctionSpi>();
+    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (_spi_mosi, _spi_miso, _spi_sclk)).init(
+        &mut pac.RESETS,
+        clocks.peripheral_clock.freq(),
+        3u32.MHz(),
+        MODE_0,
+    );
+
+    let mut ws = Ws2812::new_sk6812w(spi);
+
+    let mut data: [RGBW<u8>; NUM_LEDS] = [RGBW::default(); NUM_LEDS];
+    let empty: [RGBW<u8>; NUM_LEDS] = [RGBW::default(); NUM_LEDS];
+
+    // Blink the LED's in a blue-green-red-white pattern.
+    for led in data.iter_mut().step_by(4) {
+        led.b = 0x10;
+    }
+
+    if NUM_LEDS > 1 {
+        for led in data.iter_mut().skip(1).step_by(4) {
+            led.g = 0x10;
+        }
+    }
+
+    if NUM_LEDS > 2 {
+        for led in data.iter_mut().skip(2).step_by(4) {
+            led.r = 0x10;
+        }
+    }
+
+    if NUM_LEDS > 3 {
+        for led in data.iter_mut().skip(3).step_by(4) {
+            led.a = White(0x10);
+        }
+    }
 
     loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        ws.write(data.iter().cloned()).unwrap();
+        delay.delay_ms(DELAY.integer());
+        ws.write(empty.iter().cloned()).unwrap();
+        delay.delay_ms(DELAY.integer());
     }
 }
-
-// End of file
