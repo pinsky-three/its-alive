@@ -26,7 +26,7 @@ use ws2812_spi::Ws2812;
 #[used]
 pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
-// const SYS_HZ: u32 = 125_000_000_u32;
+const SYS_HZ: u32 = 125_000_000_u32;
 
 #[entry]
 fn main() -> ! {
@@ -71,13 +71,14 @@ fn main() -> ! {
     );
 
     // These are implicitly used by the spi driver if they are in the correct mode
-    let _spi_sclk = pins.gpio6.into_function::<FunctionSpi>();
-    let _spi_mosi = pins.gpio7.into_function::<FunctionSpi>();
-    let _spi_miso = pins.gpio4.into_function::<FunctionSpi>();
-    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (_spi_mosi, _spi_miso, _spi_sclk)).init(
+    let spi_sclk = pins.gpio6.into_function::<FunctionSpi>();
+    let spi_mosi = pins.gpio7.into_function::<FunctionSpi>();
+    let spi_miso = pins.gpio4.into_function::<FunctionSpi>();
+
+    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk)).init(
         &mut pac.RESETS,
-        clocks.peripheral_clock.freq(),
-        3u32.MHz(),
+        SYS_HZ.Hz(),
+        3_000_000u32.Hz(),
         MODE_0,
     );
 
