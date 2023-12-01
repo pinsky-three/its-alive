@@ -14,17 +14,18 @@ use panic_probe as _;
 use rp_pico::hal;
 
 use rp_pico::hal::fugit::RateExtU32;
+use rp_pico::hal::gpio;
 use rp_pico::hal::pac;
 use rp_pico::hal::prelude::*;
-use rp_pico::hal::{gpio::FunctionSpi, sio::Sio, spi::Spi};
+use rp_pico::hal::{sio::Sio, spi::Spi};
 use smart_leds::{SmartLedsWrite, White, RGBW};
 use ws2812_spi::Ws2812;
 
 /// The linker will place this boot block at the start of our program image. We
 /// need this to help the ROM bootloader get our code up and running.
-#[link_section = ".boot_loader"]
-#[used]
-pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+// #[link_section = ".boot_loader"]
+// #[used]
+// pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
 
 const SYS_HZ: u32 = 125_000_000_u32;
 
@@ -36,47 +37,47 @@ fn main() -> ! {
     const NUM_LEDS: usize = 8;
     debug_assert_ne!(NUM_LEDS, 0);
 
-    let mut pac = pac::Peripherals::take().unwrap();
+    let mut peripherals = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
 
     // Set up the watchdog driver - needed by the clock setup code
-    let mut watchdog = hal::watchdog::Watchdog::new(pac.WATCHDOG);
+    let mut watchdog = hal::watchdog::Watchdog::new(peripherals.WATCHDOG);
 
     // Configure the clocks
     //
     // Our default is 12 MHz crystal input, 125 MHz system clock
     let clocks = hal::clocks::init_clocks_and_plls(
         rp_pico::XOSC_CRYSTAL_FREQ,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
+        peripherals.XOSC,
+        peripherals.CLOCKS,
+        peripherals.PLL_SYS,
+        peripherals.PLL_USB,
+        &mut peripherals.RESETS,
         &mut watchdog,
     )
     .ok()
     .unwrap();
 
-    // let frequency = Rate::MHz(3u32);
-
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
 
-    let sio = Sio::new(pac.SIO);
+    let sio = Sio::new(peripherals.SIO);
 
     let pins = rp_pico::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
+        peripherals.IO_BANK0,
+        peripherals.PADS_BANK0,
         sio.gpio_bank0,
-        &mut pac.RESETS,
+        &mut peripherals.RESETS,
     );
 
     // These are implicitly used by the spi driver if they are in the correct mode
-    let spi_sclk = pins.gpio6.into_function::<FunctionSpi>();
-    let spi_mosi = pins.gpio7.into_function::<FunctionSpi>();
-    let spi_miso = pins.gpio4.into_function::<FunctionSpi>();
+    let spi_sclk: gpio::Pin<_, gpio::FunctionSpi, gpio::PullNone> = pins.gpio2.reconfigure();
+    let spi_mosi: gpio::Pin<_, gpio::FunctionSpi, gpio::PullNone> = pins.gpio3.reconfigure();
+    let spi_miso: gpio::Pin<_, gpio::FunctionSpi, gpio::PullUp> = pins.gpio4.reconfigure();
 
-    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk)).init(
-        &mut pac.RESETS,
+    let spi = Spi::<_, _, _, 8>::new(peripherals.SPI0, (spi_mosi, spi_miso, spi_sclk));
+
+    let spi = spi.init(
+        &mut peripherals.RESETS,
         SYS_HZ.Hz(),
         3_000_000u32.Hz(),
         MODE_0,
